@@ -12,7 +12,7 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 
-SessionLocal = sessionmaker(bind=engine,autoflush=False, expire_on_commit=False)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 def get_db():
     db = SessionLocal()
