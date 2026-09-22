@@ -8,10 +8,47 @@
 import sys
 import requests
 from uuid import uuid4
+import time
+import threading
+from statistics import mean
 from decimal import Decimal
 
 BASE = "http://127.0.0.1:8000"
+THREADS = 20
+REQUESTS_PER_THREAD = 200
 
+
+results = {
+    "ok": 0,
+    "fail": 0,
+    "times": [],
+    "lock": threading.Lock(),
+}
+
+
+def worker(thread_id: int) -> None:
+    local_ok = 0
+    local_fail = 0
+    local_times = []
+
+    for _ in range(REQUESTS_PER_THREAD):
+        start = time.perf_counter()
+        try:
+            r = requests.get(f"{BASE}/catalog/", timeout=5)
+            elapsed = time.perf_counter() - start
+            if r.status_code == 200:
+                local_ok += 1
+            else:
+                local_fail += 1
+            local_times.append(elapsed)
+        except requests.RequestException:
+            local_fail += 1
+            local_times.append(time.perf_counter() - start)
+
+    with results["lock"]:
+        results["ok"] += local_ok
+        results["fail"] += local_fail
+        results["times"].extend(local_times)
 
 def sep(title: str) -> None:
     print(f"\n{'=' * 60}")
@@ -21,9 +58,9 @@ def sep(title: str) -> None:
 
 def check(label: str, condition: bool, extra: str = "") -> None:
     if condition:
-        print(f"  ✓ {label} {extra}")
+        print(f"  [SUCCESS] {label} {extra}")
     else:
-        print(f"  ✗ {label} {extra}")
+        print(f"  [UNSECCESS] {label} {extra}")
         sys.exit(1)
 
 
@@ -36,7 +73,7 @@ def main():
         r = requests.get(f"{BASE}/docs", timeout=3)
         check("сервер отвечает", r.status_code == 200, f"status={r.status_code}")
     except requests.ConnectionError:
-        print("✗ Сервер недоступен. Запусти uvicorn app.main:app --reload")
+        print("[UNSECCESS] Сервер недоступен. Запусти uvicorn app.main:app --reload")
         sys.exit(1)
 
     # ============================================================
@@ -166,9 +203,35 @@ def main():
     check("status 400", r.status_code == 400, f"got {r.status_code}")
 
     # ============================================================
-    sep("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ")
-    print("✓ DONE")
+    
+    sep("10. HIGHLOAD TESTING")
+    total_requests = THREADS * REQUESTS_PER_THREAD
+    print(f"Запуск: {THREADS} потоков × {REQUESTS_PER_THREAD} запросов = {total_requests} всего")
+    print("Ожидаем...")
 
+    start = time.perf_counter()
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(THREADS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    total_time = time.perf_counter() - start
+
+    print()
+    print(f"Общее время:     {total_time:.2f} сек")
+    print(f"Успешно:         {results['ok']}")
+    print(f"Ошибок:          {results['fail']}")
+    print(f"RPS:             {results['ok'] / total_time:.0f} запросов/сек")
+    if results["times"]:
+        print(f"Средний latency: {mean(results['times']) * 1000:.1f} мс")
+        print(f"Максимум:        {max(results['times']) * 1000:.1f} мс")
+        print(f"Минимум:         {min(results['times']) * 1000:.1f} мс")
+    
+    sep("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ")
+    print("[SUCCESS] DONE")
+    
 
 if __name__ == "__main__":
     main()
