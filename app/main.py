@@ -19,6 +19,12 @@ from app.domain.exceptions import (
 from app.services.payment.facade import PaymentFacade
 from app.services.payment.fake_adapter import FakePaymentAdapter
 
+from app.domain.order import Order
+from app.domain.order import OrderStatus
+from app.db.repositories.order_repo import OrderRepository
+from app.services.order_service import OrderService, EmptyCartError, PaymentFailedError
+from app.services.payment import PaymentFacade, FakePaymentAdapter
+
 
 Base.metadata.create_all(bind=engine)
 
@@ -59,6 +65,11 @@ class AddItemRequest(BaseModel):
     product_id: UUID
     quantity: int
 
+class OrderRead(BaseModel):
+    id: UUID
+    user_id: UUID
+    status: str
+    total: Decimal
 
 # ============================================================
 # Dependencies
@@ -70,6 +81,14 @@ def get_catalog_service(db: Session = Depends(get_db)) -> CatalogService:
 
 def get_cart_service(db: Session = Depends(get_db)) -> CartService:
     return CartService(CartRepository(db), ProductRepository(db))
+
+def get_order_service(db: Session = Depends(get_db)) -> OrderService:
+    payment = PaymentFacade(FakePaymentAdapter())
+    return OrderService(
+        cart_repo=CartRepository(db),
+        order_repo=OrderRepository(db),
+        payment=payment,
+    )
 
 
 # ============================================================
@@ -170,3 +189,18 @@ def pay_order(order_id: UUID, amount: Decimal):
     facade = PaymentFacade(FakePaymentAdapter())
     result = facade.pay_order(order_id, amount)
     return {"success": result.success, "transaction_id": result.transaction_id}
+
+@app.post("/orders/checkout", response_model=OrderRead)
+def checkout(user_id: UUID, service: OrderService = Depends(get_order_service)):
+    try:
+        order = service.checkout(user_id)
+    except EmptyCartError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PaymentFailedError as e:
+        raise HTTPException(status_code=402, detail=str(e))
+    return OrderRead(
+        id=order.id,
+        user_id=order.user_id,
+        status=order.status.value,
+        total=order.total,
+    )
